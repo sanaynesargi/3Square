@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>L-Shape Visibility Prisms</title>
+    <style>
+        body { 
+            margin: 0; 
+            background: #000;
+            font-family: Arial, sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        #canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 12px;
+            z-index: 10;
+            max-width: 300px;
+        }
+        #stats {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 11px;
+            font-family: monospace;
+        }
+        #legend {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <b>L-Shape Visibility</b><br>
+        <br>
+        <b>Quadrants:</b><br>
+        • Q1 (lower-left): Always 100%<br>
+        • Q2 (lower-right): Variable<br>
+        • Q3 (upper-left): Symmetric<br>
+        <br>
+        <b>Controls:</b><br>
+        • Drag to rotate<br>
+        • Scroll to zoom (far out for full view)<br>
+        • Right-click drag to pan<br>
+        <br>
+        <button id="topViewBtn" style="background: #2196F3; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; margin-top: 10px;">📍 Top View</button>
+        <button id="resetBtn" style="background: #666; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; margin-top: 5px;">↺ Reset View</button>
+        <br>
+        <span id="status" style="margin-top: 10px; display: block;">Loading...</span>
+    </div>
+    
+    <div id="stats">
+        Hover over prism for details
+    </div>
+
+    <div id="legend">
+        <div style="color: #2196f3;">■</div> Low visibility<br>
+        <div style="color: #4CAF50;">■</div> High visibility
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        try {
+            // Basic setup
+            const canvas = document.createElement('canvas');
+            document.body.appendChild(canvas);
+            
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000a1a);
+            
+            const camera = new THREE.PerspectiveCamera(
+                60,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                1000
+            );
+            
+            const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+
+            // Lighting
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(5, 5, 5);
+            light.castShadow = true;
+            scene.add(light);
+            
+            const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambient);
+
+            // Visibility formula for Q2 (0 to 1)
+            function getVisibilityQ2(x, y) {
+                const eps = 0.001;
+                x = Math.max(1 + eps, Math.min(2 - eps, x));
+                y = Math.max(eps, Math.min(1 - eps, y));
+                
+                const sum = x + y;
+                let visibility;
+                
+                if (sum > 2) {
+                    visibility = (1 - y) / (2 * (x - 1));
+                } else {
+                    visibility = (3 - x - 2*y) / (2 * (1 - y));
+                }
+                
+                return Math.max(0, Math.min(1, visibility));
+            }
+
+            // Visibility for Q3 (symmetric to Q2)
+            function getVisibilityQ3(x3, y3) {
+                // Transform Q3 coords [0,1]×[1,2] to Q2 coords [1,2]×[0,1]
+                const x2 = 2 - x3;
+                const y2 = 2 - y3;
+                return getVisibilityQ2(x2, y2);
+            }
+
+            // Create prisms for Q1, Q2, Q3
+            const prisms = [];
+            const segPerQ = 10;
+            const prismWidth = 1 / segPerQ;
+            const prismDepth = 1 / segPerQ;
+            
+            // Create Q3 group for rotation around its center
+            const q3Group = new THREE.Group();
+            const q3Center = new THREE.Vector3(0, 0, 1.0);  // Center of Q3 region
+            q3Group.position.copy(q3Center);
+            scene.add(q3Group);
+
+            // Q1: [0,1] × [0,1] - always 100% visibility
+            // Position in 3D: x ∈ [-0.5, 0.5], z ∈ [-0.5, 0.5]
+            for (let iy = 0; iy < segPerQ; iy++) {
+                for (let ix = 0; ix < segPerQ; ix++) {
+                    const x = (ix + 0.5) / segPerQ;
+                    const y = (iy + 0.5) / segPerQ;
+                    const visibility = 1.0; // Q1 always sees everything
+                    
+                    const posX = x - 0.5;  // [0,1] → [-0.5, 0.5]
+                    const posZ = y - 0.5;  // [0,1] → [-0.5, 0.5]
+                    createPrism(posX, posZ, visibility, 'Q1', x, y);
+                }
+            }
+
+            // Q2: [1,2] × [0,1]
+            // Position in 3D: x ∈ [0.5, 1.5], z ∈ [-0.5, 0.5]
+            for (let iy = 0; iy < segPerQ; iy++) {
+                for (let ix = 0; ix < segPerQ; ix++) {
+                    const x = 1 + (ix + 0.5) / segPerQ;
+                    const y = (iy + 0.5) / segPerQ;
+                    const visibilityIntoQ3 = getVisibilityQ2(x, y);
+                    // Total visibility: can see Q1 (always 1) + Q2 (always 1) + partial Q3
+                    const totalVisibility = (1 + 1 + visibilityIntoQ3) / 3;  // As % of max (which is 3)
+                    
+                    const posX = x - 0.5;  // [1,2] → [0.5, 1.5]
+                    const posZ = y - 0.5;  // [0,1] → [-0.5, 0.5]
+                    createPrism(posX, posZ, totalVisibility, 'Q2', x, y);
+                }
+            }
+
+            // Q3: [0,1] × [1,2]
+            // Position in 3D: x ∈ [-0.5, 0.5], z ∈ [0.5, 1.5] (flipped x: y=1 wall faces Q1)
+            // Offset positions so they're relative to Q3's center at (0, 0, 1.0)
+            for (let iy = 0; iy < segPerQ; iy++) {
+                for (let ix = 0; ix < segPerQ; ix++) {
+                    const x3 = (ix + 0.5) / segPerQ;
+                    const y3 = 1 + (iy + 0.5) / segPerQ;
+                    const visibilityIntoQ2 = getVisibilityQ3(x3, y3);
+                    // Total visibility: can see Q1 (always 1) + Q3 (always 1) + partial Q2
+                    const totalVisibility = (1 + 1 + visibilityIntoQ2) / 3;  // As % of max (which is 3)
+                    
+                    const posX = (0.5 - x3) - q3Center.x;  // Offset by center
+                    const posZ = (y3 - 0.5) - q3Center.z;  // Offset by center
+                    createPrism(posX, posZ, totalVisibility, 'Q3', x3, y3, q3Group);
+                }
+            }
+
+            function createPrism(posX, posY, visibility, quadrant, origX, origY, parentGroup = null) {
+                const height = visibility;
+                const geometry = new THREE.BoxGeometry(
+                    prismWidth * 0.95,
+                    height,
+                    prismDepth * 0.95
+                );
+                
+                // Color based on visibility
+                let r, g, b;
+                if (visibility < 0.5) {
+                    const t = visibility * 2;
+                    r = 0.13;
+                    g = 0.59 + (0.74 - 0.59) * t;
+                    b = 0.95 - (0.12 * t);
+                } else {
+                    const t = (visibility - 0.5) * 2;
+                    r = 0.3 * t;
+                    g = 0.74 - (0.06 * t);
+                    b = 0.83 - (0.83 * t);
+                }
+                
+                const material = new THREE.MeshPhongMaterial({
+                    color: new THREE.Color(r, g, b),
+                    shininess: 100
+                });
+                
+                const prism = new THREE.Mesh(geometry, material);
+                prism.position.x = posX;
+                prism.position.y = height / 2;
+                prism.position.z = posY;
+                
+                prism.castShadow = true;
+                prism.receiveShadow = true;
+                
+                prism.userData = { 
+                    quadrant,
+                    x: origX,
+                    y: origY,
+                    visibility
+                };
+                
+                if (parentGroup) {
+                    parentGroup.add(prism);
+                } else {
+                    scene.add(prism);
+                }
+                prisms.push(prism);
+            }
+
+            // Add ground plane
+            const groundGeometry = new THREE.PlaneGeometry(1.2, 1.2);
+            const groundMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x111111,
+                roughness: 0.8
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.01;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Add quadrant dividers
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0x444444 });
+            
+            // Vertical line at x=0
+            const vLine = new THREE.BufferGeometry();
+            vLine.setAttribute('position', new THREE.BufferAttribute(
+                new Float32Array([0, 0, -0.5, 0, 0, 0.5]), 3
+            ));
+            scene.add(new THREE.Line(vLine, lineMaterial));
+            
+            // Horizontal line at y=0
+            const hLine = new THREE.BufferGeometry();
+            hLine.setAttribute('position', new THREE.BufferAttribute(
+                new Float32Array([-0.5, 0, 0, 0.5, 0, 0]), 3
+            ));
+            scene.add(new THREE.Line(hLine, lineMaterial));
+
+            // Position camera
+            camera.position.set(0.5, 0.8, 1.0);
+            camera.lookAt(0, 0.4, 0);
+
+            // Raycaster for hover detection
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+
+            // Mouse controls
+            let rotation = { x: 0, y: 0 };
+            let mouseDown = false;
+            let mouseX = 0, mouseY = 0;
+            let isPanning = false;
+
+            document.addEventListener('mousedown', (e) => {
+                if (e.button === 2) {
+                    isPanning = true;
+                } else {
+                    mouseDown = true;
+                }
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (mouseDown && !isPanning) {
+                    rotation.y += (e.clientX - mouseX) * 0.01;
+                    rotation.x += (e.clientY - mouseY) * 0.01;
+                    
+                    scene.rotation.order = 'YXZ';
+                    scene.rotation.y = rotation.y;
+                    scene.rotation.x = rotation.x;
+                    
+                    mouseX = e.clientX;
+                    mouseY = e.clientY;
+                }
+                
+                if (isPanning) {
+                    camera.position.x -= (e.clientX - mouseX) * 0.001;
+                    camera.position.y += (e.clientY - mouseY) * 0.001;
+                    mouseX = e.clientX;
+                    mouseY = e.clientY;
+                }
+
+                // Hover detection
+                mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObjects(prisms);
+
+                if (intersects.length > 0) {
+                    const obj = intersects[0].object;
+                    const data = obj.userData;
+                    document.getElementById('stats').innerHTML = 
+                        `${data.quadrant}<br>` +
+                        `x = ${data.x.toFixed(3)}<br>` +
+                        `y = ${data.y.toFixed(3)}<br>` +
+                        `visibility = ${(data.visibility * 100).toFixed(1)}%`;
+                } else {
+                    document.getElementById('stats').innerHTML = 'Hover over prism for details';
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                mouseDown = false;
+                isPanning = false;
+            });
+
+            document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            document.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const zoomSpeed = 0.003;  // Increased sensitivity (was 0.0008)
+                const newZ = camera.position.z + e.deltaY * zoomSpeed;
+                // Allow wider zoom range (0.3 to 5)
+                camera.position.z = Math.max(0.3, Math.min(5, newZ));
+            });
+
+            // Top view button
+            document.getElementById('topViewBtn').addEventListener('click', () => {
+                camera.position.set(0, 2.5, 0.01);
+                camera.zoom = 1.5;
+                camera.updateProjectionMatrix();
+                camera.lookAt(0, 0, 0);
+                rotation = { x: 0, y: 0 };
+                scene.rotation.x = 0;
+                scene.rotation.y = 0;
+            });
+
+            // Reset view button
+            document.getElementById('resetBtn').addEventListener('click', () => {
+                camera.position.set(0.7, 0.8, 1.2);
+                camera.lookAt(0, 0.3, 0);
+                rotation = { x: 0, y: 0 };
+                scene.rotation.x = 0;
+                scene.rotation.y = 0;
+            });
+
+            // Set Q3 rotation to 270 degrees
+            q3Group.rotation.y = 270 * Math.PI / 180;  // 270 degrees in radians
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            // Animation
+            function animate() {
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }
+
+            document.getElementById('status').innerHTML = '✓ Ready | ' + prisms.length + ' prisms';
+            animate();
+
+        } catch (error) {
+            document.getElementById('status').innerHTML = 'ERROR: ' + error.message;
+            console.error(error);
+        }
+    </script>
+</body>
+</html>
